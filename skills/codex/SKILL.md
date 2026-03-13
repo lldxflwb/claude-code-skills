@@ -1,6 +1,6 @@
 ---
 name: codex
-description: "调用 Codex CLI 执行任务，获取来自 GPT 模型的独立意见。TRIGGER: 1) 完成涉及多文件的代码变更后建议调用审核 2) 需要不同 AI 视角的第二意见时 3) 用户明确要求用 Codex 做某事时。"
+description: "当用户在自然语言中提到 codex，并希望它分析、讨论、复核或给方案时，立即使用此 skill。典型表达包括：'和 codex 讨论一下''让 codex 看看''问问 codex''用 codex 给个第二意见''多和 codex 讨论几轮'。此 skill 负责调用 Codex CLI 获取另一模型的独立意见。若用户只是询问 codex CLI 本身的安装、配置、命令或故障排查，则不触发。"
 user-invocable: true
 argument-hint: "<要让 Codex 做的事情>"
 ---
