@@ -13,7 +13,16 @@ Codex 调用协调者。你负责将用户的意图转化为 Codex CLI 可执行
 - [Codex CLI](https://github.com/openai/codex) 已安装并登录 (`codex login`)
 - `~/.codex/config.toml` 中已配置模型
 
+环境检测与安装引导详见 [setup.md](setup.md)。
+
 ## Process
+
+### 0. 环境检测
+首次执行前，检查 Codex CLI 是否可用：
+```bash
+which codex 2>/dev/null && echo "OK" || echo "CODEX_NOT_FOUND"
+```
+如果输出 `CODEX_NOT_FOUND`，停止执行并提示用户安装。详细流程见 [setup.md](setup.md)。
 
 ### 1. 理解意图
 从 $ARGUMENTS 中理解用户想让 Codex 做什么。常见场景包括但不限于:
