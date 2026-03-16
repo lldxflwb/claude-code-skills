@@ -106,11 +106,18 @@ def render(tex_file_path):
 
         shutil.copy2(tmp_pdf, pdf_out)
 
+        # Convert PDF to PNG for visual verification
+        png_out = RENDERS_DIR / f"{out_name}.png"
+        subprocess.run(
+            ["pdftocairo", "-png", "-r", "200", "-singlefile", str(tmp_pdf), str(png_out.with_suffix(""))],
+            capture_output=True, text=True,
+        )
+
         host = get_host()
         port = get_port()
         url = f"http://{host}:{port}/{out_name}.svg"
 
-        return {"url": url}
+        return {"url": url, "png": str(png_out)}
 
 
 def main():
@@ -137,6 +144,7 @@ def main():
         sys.exit(1)
     else:
         print(result["url"])
+        print(result["png"])
 
 
 if __name__ == "__main__":

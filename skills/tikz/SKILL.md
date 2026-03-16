@@ -9,8 +9,6 @@ argument-hint: "<description of the diagram to create>"
 
 ## How to Use
 
-Two steps:
-
 **Step 1.** Write a `.tex` file in the project directory using the Write tool:
 
 ```latex
@@ -28,12 +26,42 @@ Two steps:
 python3 /Users/karlchen/.claude/skills/tikz/scripts/render_tikz.py <path-to-tex-file>
 ```
 
-Output is one line: the URL. Each render gets a unique timestamp, so re-running the same file produces a new URL. Return the URL to the user. Done.
+Output is two lines: the URL and the local PNG file path. Each render gets a unique timestamp, so re-running the same file produces a new URL.
+
+**Step 3.** Spawn a subagent to verify the rendering result and iterate if needed:
+
+```
+Use the Agent tool to spawn a subagent with this prompt:
+
+"Read the PNG image at <png-path> and the TikZ source at <tex-path>.
+Verify the rendering quality:
+- Is any text overlapping or cut off?
+- Are elements too crowded or poorly spaced?
+- Are arrows and connections clear?
+- Is the overall layout readable?
+
+If issues are found, edit the .tex file to fix them (increase node distance,
+adjust font size, reposition elements, etc.), then re-render:
+  python3 /Users/karlchen/.claude/skills/tikz/scripts/render_tikz.py <tex-path>
+Read the new PNG and verify again. Repeat until the result looks good.
+Return the final URL."
+```
+
+**Step 4.** Return the final URL from the subagent to the user.
 
 **Do NOT:**
 - Call `ensure_server.py` — the render script handles server internally
 - Open the URL with `open` command or browser tools
-- Try to preview or read the SVG file
+
+## Embedding in Plan Documents
+
+When creating diagrams for a plan or markdown document, render the diagram first, then use the relative URI as a markdown image:
+
+```markdown
+![Pipeline Overview](/diagram_20260316_120000_123456.svg)
+```
+
+Use relative URI (e.g. `/name.svg`), not absolute URL or local file path. The plan viewer will display the image inline.
 
 ## TikZ Tips
 

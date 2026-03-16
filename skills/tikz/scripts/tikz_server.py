@@ -102,19 +102,48 @@ body {{ font-family: Georgia, 'Noto Serif SC', serif; background: #f8f8f8; color
 .page-content th {{ background: #d0d0d0; font-weight: 800; }}
 .page-content blockquote {{ border-left: 4px solid #444; padding-left: 1rem; color: #222; margin: 1rem 0; font-style: italic; }}
 .page-content a {{ color: #000; text-decoration: underline; font-weight: 600; }}
+.page-content img {{ display: block; margin: 1rem auto; width: 100%; height: auto; }}
 
 /* === Normal mode === */
 body.normal {{ height: auto; overflow: auto; background: #fff;
   font-family: system-ui, -apple-system, sans-serif; }}
 body.normal .reader {{ overflow: visible; }}
 body.normal .page-zone {{ display: none; }}
-body.normal .page-content {{ overflow: visible; padding: 1.5rem 2rem; line-height: 1.7; }}
+body.normal .page-content {{ overflow: visible; padding: 1.5rem 2rem; line-height: 1.7; max-width: 100%; }}
 body.normal .page-content code {{ background: #f3f4f6; }}
 body.normal .page-content pre {{ background: #f3f4f6; border-color: #e5e7eb; }}
 body.normal .reader {{ -webkit-user-select: auto; user-select: auto; cursor: auto; }}
 body.normal .page-content a {{ color: #2563eb; }}
 body.normal .page-content th {{ background: #f9fafb; }}
 body.normal .page-content blockquote {{ border-left-color: #d1d5db; color: #6b7280; }}
+
+/* FAB group (normal mode only) */
+.fab-group {{ display: none; }}
+body.normal .fab-group {{ display: flex; flex-direction: column; gap: .5rem;
+  position: fixed; right: 1.5rem; bottom: 2rem; z-index: 100; }}
+.toc-fab {{ display: none; }}
+body.normal .toc-fab {{ display: flex; width: 3rem; height: 3rem;
+  border-radius: 50%; background: #2563eb; color: #fff; border: none; cursor: pointer;
+  align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 2px 8px rgba(0,0,0,.2);
+  transition: background .2s; }}
+body.normal .toc-fab:hover {{ background: #1d4ed8; }}
+.toc-sidebar {{ position: fixed; top: 0; right: -320px; width: 300px; height: 100vh;
+  background: #fff; box-shadow: -2px 0 12px rgba(0,0,0,.1); z-index: 99;
+  transition: right .25s ease; padding: 1rem 0; overflow-y: auto; }}
+.toc-sidebar.open {{ right: 0; }}
+.toc-sidebar .toc-header {{ display: flex; align-items: center; justify-content: space-between;
+  padding: 0 1.2rem .8rem; border-bottom: 1px solid #eee; margin-bottom: .5rem; }}
+.toc-sidebar .toc-header span {{ font-weight: 700; font-size: 1rem; color: #333; }}
+.toc-sidebar .toc-close {{ background: none; border: none; font-size: 1.3rem; cursor: pointer; color: #999; }}
+.toc-sidebar .toc-close:hover {{ color: #333; }}
+.toc-sidebar ul {{ list-style: none; padding: 0; margin: 0; }}
+.toc-sidebar li {{ padding: .4rem 1.2rem; font-size: .9rem; }}
+.toc-sidebar li.h3 {{ padding-left: 2.2rem; font-size: .85rem; }}
+.toc-sidebar li a {{ color: #555; text-decoration: none; display: block; }}
+.toc-sidebar li a:hover {{ color: #2563eb; }}
+.toc-sidebar li.active a {{ color: #2563eb; font-weight: 600; }}
+.toc-overlay {{ display: none; position: fixed; inset: 0; z-index: 98; }}
+.toc-overlay.open {{ display: block; }}
 </style>
 </head><body>
 
@@ -132,6 +161,17 @@ body.normal .page-content blockquote {{ border-left-color: #d1d5db; color: #6b72
   <div class="page-zone left" id="zone-left"></div>
   <div class="page-zone right" id="zone-right"></div>
   <div class="page-content" id="content"></div>
+</div>
+
+<div class="fab-group" id="fab-group">
+  <button class="toc-fab" id="btn-top" title="回到顶部">&#8679;</button>
+  <button class="toc-fab" id="btn-bottom" title="去到底部">&#8681;</button>
+  <button class="toc-fab" id="toc-fab" title="目录">&#9776;</button>
+</div>
+<div class="toc-overlay" id="toc-overlay"></div>
+<div class="toc-sidebar" id="toc-sidebar">
+  <div class="toc-header"><span>目录</span><button class="toc-close" id="toc-close">&times;</button></div>
+  <ul id="toc-list"></ul>
 </div>
 
 
@@ -404,6 +444,72 @@ window.addEventListener('resize', () => {{
   if (mode === 'eink') {{ paginate(); render(); }}
 }});
 
+applyMode();
+
+// TOC logic (normal mode only)
+const tocFab = document.getElementById('toc-fab');
+const tocSidebar = document.getElementById('toc-sidebar');
+const tocOverlay = document.getElementById('toc-overlay');
+const tocList = document.getElementById('toc-list');
+const tocClose = document.getElementById('toc-close');
+
+function buildToc() {{
+  tocList.innerHTML = '';
+  const headings = content.querySelectorAll('h1, h2, h3');
+  if (headings.length === 0) {{ tocFab.style.display = 'none'; return; }}
+  headings.forEach((h, i) => {{
+    if (!h.id) h.id = 'heading-' + i;
+    const li = document.createElement('li');
+    li.className = h.tagName.toLowerCase();
+    const a = document.createElement('a');
+    a.href = '#' + h.id;
+    a.textContent = h.textContent;
+    a.addEventListener('click', e => {{
+      e.preventDefault();
+      h.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+      closeToc();
+    }});
+    li.appendChild(a);
+    tocList.appendChild(li);
+  }});
+}}
+
+function openToc() {{
+  tocSidebar.classList.add('open');
+  tocOverlay.classList.add('open');
+  highlightToc();
+}}
+
+function closeToc() {{
+  tocSidebar.classList.remove('open');
+  tocOverlay.classList.remove('open');
+}}
+
+function highlightToc() {{
+  const headings = content.querySelectorAll('h1, h2, h3');
+  const items = tocList.querySelectorAll('li');
+  let activeIdx = 0;
+  headings.forEach((h, i) => {{
+    if (h.getBoundingClientRect().top <= 100) activeIdx = i;
+  }});
+  items.forEach((li, i) => li.classList.toggle('active', i === activeIdx));
+}}
+
+document.getElementById('btn-top').addEventListener('click', () => window.scrollTo({{ top: 0, behavior: 'smooth' }}));
+document.getElementById('btn-bottom').addEventListener('click', () => window.scrollTo({{ top: document.body.scrollHeight, behavior: 'smooth' }}));
+tocFab.addEventListener('click', () => tocSidebar.classList.contains('open') ? closeToc() : openToc());
+tocClose.addEventListener('click', closeToc);
+tocOverlay.addEventListener('click', closeToc);
+window.addEventListener('scroll', () => {{
+  if (tocSidebar.classList.contains('open')) highlightToc();
+}});
+
+// Rebuild TOC when mode changes
+const origApply = applyMode;
+applyMode = function() {{
+  origApply();
+  if (mode === 'normal') buildToc();
+}};
 applyMode();
 </script>
 </body></html>"""
