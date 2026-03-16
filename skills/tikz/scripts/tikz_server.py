@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Lightweight HTTP server for serving rendered TikZ outputs."""
+"""Lightweight HTTP server for serving rendered TikZ outputs and plans."""
 
 import json
 import signal
 import sys
+import urllib.parse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from config import get_host, get_port
 CACHE_DIR = Path.home() / ".cache" / "tikz-skill"
 RENDERS_DIR = CACHE_DIR / "renders"
 STATE_FILE = CACHE_DIR / "server.json"
+PLANS_DIR = Path.home() / ".claude" / "plans"
 
 
 class TikZHandler(SimpleHTTPRequestHandler):
@@ -24,6 +26,8 @@ class TikZHandler(SimpleHTTPRequestHandler):
             self._serve_json(200, {"status": "ok"})
         elif self.path == "/":
             self._serve_index()
+        elif self.path.startswith("/plans/"):
+            self._serve_plan()
         else:
             super().do_GET()
 
@@ -35,53 +39,462 @@ class TikZHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _serve_index(self):
-        RENDERS_DIR.mkdir(parents=True, exist_ok=True)
-        svgs = sorted(
-            RENDERS_DIR.glob("*.svg"),
-            key=lambda f: f.stat().st_mtime,
-            reverse=True,
-        )
+    def _serve_plan(self):
+        """Serve a plan markdown file rendered as HTML."""
+        name = urllib.parse.unquote(self.path[len("/plans/"):])
+        plan_file = PLANS_DIR / name
+        if not plan_file.exists() or not plan_file.suffix == ".md":
+            self.send_error(404, "Plan not found")
+            return
 
-        host = get_host()
-        port = get_port()
-        base_url = f"http://{host}:{port}"
-
-        cards = ""
-        for svg in svgs:
-            name = svg.stem
-            svg_url = f"{base_url}/{svg.name}"
-            pdf_path = RENDERS_DIR / f"{name}.pdf"
-            pdf_link = ""
-            if pdf_path.exists():
-                pdf_link = f' | <a href="{base_url}/{name}.pdf">PDF</a>'
-            cards += f"""
-            <div class="card">
-                <a href="{svg_url}"><img src="/{svg.name}" alt="{name}"></a>
-                <div class="name">{name}{pdf_link}</div>
-            </div>"""
-
-        if not cards:
-            cards = '<p class="empty">No renders yet.</p>'
+        import base64 as _b64
+        from config import get_default_view_mode
+        md_content = plan_file.read_text()
+        md_b64 = _b64.b64encode(md_content.encode()).decode()
+        title = plan_file.stem.replace("-", " ").title()
+        default_mode = get_default_view_mode()
 
         html = f"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
-<title>TikZ Renders</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+
+/* === E-ink mode (default) === */
+body {{ font-family: Georgia, 'Noto Serif SC', serif; background: #f8f8f8; color: #000;
+  height: 100vh; overflow: hidden; display: flex; flex-direction: column; }}
+.topbar {{ display: flex; align-items: center; justify-content: space-between;
+  padding: .6rem 1.5rem; border-bottom: 2px solid #888; background: #e8e8e8;
+  font-size: .85rem; color: #333; flex-shrink: 0; }}
+.topbar a {{ color: #000; text-decoration: none; font-weight: 600; }}
+.topbar a:hover {{ text-decoration: underline; }}
+.topbar .title {{ font-weight: bold; color: #000; }}
+.mode-btn {{ background: none; border: 2px solid #666; border-radius: 4px;
+  padding: .2rem .7rem; cursor: pointer; font-size: .8rem; color: #000; font-weight: 600; }}
+.mode-btn:hover {{ background: #d0d0d0; }}
+.reader {{ flex: 1; display: flex; overflow: hidden; position: relative; cursor: default;
+  -webkit-user-select: none; user-select: none; }}
+.page-zone {{ position: absolute; top: 0; height: 100%; z-index: 2; }}
+.page-zone.left {{ left: 0; width: 35%; cursor: w-resize; }}
+.page-zone.right {{ right: 0; width: 35%; cursor: e-resize; }}
+.page-content {{ max-width: 720px; margin: 0 auto; padding: 2.5rem 2rem;
+  overflow: hidden; line-height: 2; font-size: 1.35rem; font-weight: 600; letter-spacing: .02em; }}
+.page-content h1 {{ font-size: 1.9rem; margin: 1.8rem 0 1rem; border-bottom: 2px solid #666; padding-bottom: .4rem; font-weight: 800; }}
+.page-content h2 {{ font-size: 1.6rem; margin: 1.5rem 0 .8rem; font-weight: 700; }}
+.page-content h3 {{ font-size: 1.4rem; margin: 1.2rem 0 .6rem; font-weight: 700; }}
+.page-content p {{ margin: .8rem 0; }}
+.page-content ul, .page-content ol {{ margin: .8rem 0; padding-left: 1.8rem; }}
+.page-content li {{ margin: .3rem 0; }}
+.page-content code {{ font-family: 'SF Mono', Menlo, monospace; font-size: .9em;
+  background: #d0d0d0; padding: .15em .4em; border-radius: 3px; color: #000; }}
+.page-content pre {{ background: #d8d8d8; padding: 1rem; border-radius: 4px;
+  overflow: hidden; margin: 1rem 0; border: 2px solid #888;
+  white-space: pre-wrap; word-break: break-all; }}
+.page-content pre code {{ background: none; padding: 0;
+  white-space: pre-wrap; word-break: break-all; }}
+.table-wrap {{ margin: 1rem 0; }}
+.page-content table {{ border-collapse: collapse; width: 100%; display: block; }}
+.page-content th, .page-content td {{ word-break: break-word; font-size: .9em; padding: .4rem .5rem;
+  border: 2px solid #888; text-align: left; }}
+.page-content th {{ background: #d0d0d0; font-weight: 800; }}
+.page-content blockquote {{ border-left: 4px solid #444; padding-left: 1rem; color: #222; margin: 1rem 0; font-style: italic; }}
+.page-content a {{ color: #000; text-decoration: underline; font-weight: 600; }}
+
+/* === Normal mode === */
+body.normal {{ height: auto; overflow: auto; background: #fff;
+  font-family: system-ui, -apple-system, sans-serif; }}
+body.normal .reader {{ overflow: visible; }}
+body.normal .page-zone {{ display: none; }}
+body.normal .page-content {{ overflow: visible; padding: 1.5rem 2rem; line-height: 1.7; }}
+body.normal .page-content code {{ background: #f3f4f6; }}
+body.normal .page-content pre {{ background: #f3f4f6; border-color: #e5e7eb; }}
+body.normal .reader {{ -webkit-user-select: auto; user-select: auto; cursor: auto; }}
+body.normal .page-content a {{ color: #2563eb; }}
+body.normal .page-content th {{ background: #f9fafb; }}
+body.normal .page-content blockquote {{ border-left-color: #d1d5db; color: #6b7280; }}
+</style>
+</head><body>
+
+<div class="topbar">
+  <a href="/">&larr; 首页</a>
+  <span class="title">{title}</span>
+  <span style="display:flex;align-items:center;gap:.8rem">
+    <span id="pageinfo"></span>
+    <span id="progress"></span>
+    <button class="mode-btn" id="mode-toggle"></button>
+  </span>
+</div>
+
+<div class="reader" id="reader">
+  <div class="page-zone left" id="zone-left"></div>
+  <div class="page-zone right" id="zone-right"></div>
+  <div class="page-content" id="content"></div>
+</div>
+
+
+<script>
+const raw = marked.parse(new TextDecoder().decode(Uint8Array.from(atob("{md_b64}"), c => c.charCodeAt(0))));
+const content = document.getElementById('content');
+const pageinfo = document.getElementById('pageinfo');
+const progress = document.getElementById('progress');
+const modeToggle = document.getElementById('mode-toggle');
+const reader = document.getElementById('reader');
+
+let pages = [];
+let page = 0;
+
+function wrapTables(container) {{
+  container.querySelectorAll('table').forEach(t => {{
+    if (!t.parentElement.classList.contains('table-wrap')) {{
+      const w = document.createElement('div');
+      w.className = 'table-wrap';
+      t.parentNode.insertBefore(w, t);
+      w.appendChild(t);
+    }}
+  }});
+}}
+
+// Split a tall table into row-chunked sub-tables, each fitting within maxH.
+// Measures in the real container for accuracy.
+function splitTableRows(table, maxH) {{
+  const thead = table.querySelector('thead');
+  const allRows = Array.from(table.querySelectorAll('tbody tr'));
+  if (allRows.length === 0) allRows.push(...Array.from(table.querySelectorAll('tr')));
+  const fragments = [];
+  let start = 0;
+
+  while (start < allRows.length) {{
+    // Binary-search: find how many rows fit
+    let lo = 1, hi = allRows.length - start, best = 1;
+    while (lo <= hi) {{
+      const mid = (lo + hi) >> 1;
+      const t = document.createElement('table');
+      if (thead) t.appendChild(thead.cloneNode(true));
+      const tb = document.createElement('tbody');
+      for (let i = start; i < start + mid; i++) tb.appendChild(allRows[i].cloneNode(true));
+      t.appendChild(tb);
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      wrap.appendChild(t);
+      // Measure in real container
+      content.innerHTML = '';
+      content.appendChild(wrap);
+      if (outerH(wrap) <= maxH) {{ best = mid; lo = mid + 1; }}
+      else {{ hi = mid - 1; }}
+    }}
+    const t = document.createElement('table');
+    if (thead) t.appendChild(thead.cloneNode(true));
+    const tb = document.createElement('tbody');
+    for (let i = start; i < start + best; i++) tb.appendChild(allRows[i].cloneNode(true));
+    t.appendChild(tb);
+    const wrap = document.createElement('div');
+    wrap.className = 'table-wrap';
+    wrap.appendChild(t);
+    fragments.push(wrap);
+    start += best;
+  }}
+  return fragments;
+}}
+
+// Get outer height (border-box + margins)
+function outerH(el) {{
+  const s = getComputedStyle(el);
+  return el.getBoundingClientRect().height + parseFloat(s.marginTop) + parseFloat(s.marginBottom);
+}}
+
+// Split a tall <pre> into line-chunked sub-blocks, each fitting within maxH.
+function splitPreLines(pre, maxH) {{
+  const lines = pre.textContent.split('\\n');
+  const fragments = [];
+  let start = 0;
+
+  while (start < lines.length) {{
+    let lo = 1, hi = lines.length - start, best = 1;
+    while (lo <= hi) {{
+      const mid = (lo + hi) >> 1;
+      const p = document.createElement('pre');
+      const c = document.createElement('code');
+      c.textContent = lines.slice(start, start + mid).join('\\n');
+      p.appendChild(c);
+      content.innerHTML = '';
+      content.appendChild(p);
+      if (outerH(p) <= maxH) {{ best = mid; lo = mid + 1; }}
+      else {{ hi = mid - 1; }}
+    }}
+    const p = document.createElement('pre');
+    const c = document.createElement('code');
+    c.textContent = lines.slice(start, start + best).join('\\n');
+    p.appendChild(c);
+    fragments.push(p);
+    start += best;
+  }}
+  return fragments;
+}}
+
+// Recursively flatten oversized elements — find nested pre/table and split them
+function flattenOversized(el, maxH) {{
+  const results = [];
+  if (outerH(el) <= maxH) {{
+    results.push(el.cloneNode(true));
+    return results;
+  }}
+  // Direct pre
+  if (el.tagName === 'PRE') {{
+    splitPreLines(el, maxH).forEach(f => results.push(f));
+    return results;
+  }}
+  // Direct table or table-wrap
+  const table = el.classList.contains('table-wrap') ? el.querySelector('table')
+               : el.tagName === 'TABLE' ? el : null;
+  if (table) {{
+    splitTableRows(table, maxH).forEach(f => results.push(f));
+    return results;
+  }}
+  // Container (ol, ul, blockquote, div, li, etc.) — check if it has oversized children
+  const hasOversizedChild = Array.from(el.querySelectorAll('pre, table')).some(
+    inner => outerH(inner) > maxH
+  );
+  if (hasOversizedChild) {{
+    // Unwrap: emit each child separately, recursing as needed
+    for (const child of Array.from(el.children)) {{
+      flattenOversized(child, maxH).forEach(f => results.push(f));
+    }}
+  }} else {{
+    // No oversized inner blocks — keep as-is (will be paginated by second pass)
+    results.push(el.cloneNode(true));
+  }}
+  return results;
+}}
+
+function paginate() {{
+  // Lock content to its actual display size
+  content.style.overflow = 'hidden';
+  content.style.height = '100%';
+  const cs = getComputedStyle(content);
+  const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+  const maxH = content.clientHeight;
+  const fitH = maxH - padY; // usable height for content
+  pages = [];
+
+  // First pass: render all content, recursively split oversized elements
+  content.style.overflow = 'visible';
+  content.style.height = 'auto';
+  content.innerHTML = raw;
+  wrapTables(content);
+
+  const expanded = [];
+  for (const kid of Array.from(content.children)) {{
+    flattenOversized(kid, fitH).forEach(f => expanded.push(f));
+  }}
+
+  // Second pass: add elements one by one, check real overflow
+  content.style.overflow = 'hidden';
+  content.style.height = '100%';
+  content.innerHTML = '';
+
+  let pageElems = [];
+
+  for (const el of expanded) {{
+    content.appendChild(el.cloneNode(true));
+
+    if (content.scrollHeight > maxH) {{
+      // Overflowed — remove last child, flush page
+      content.removeChild(content.lastChild);
+      if (pageElems.length > 0) {{
+        pages.push(content.innerHTML);
+      }}
+      // Start new page with this element
+      content.innerHTML = '';
+      content.appendChild(el.cloneNode(true));
+      pageElems = [el];
+
+      // Fallback: if single element STILL overflows, force-split it
+      if (content.scrollHeight > maxH) {{
+        const inner = content.firstChild;
+        if (inner && inner.tagName === 'PRE') {{
+          content.innerHTML = '';
+          const chunks = splitPreLines(inner, fitH);
+          // Re-add chunks through normal pagination
+          for (const chunk of chunks) {{
+            content.appendChild(chunk.cloneNode(true));
+            if (content.scrollHeight > maxH) {{
+              content.removeChild(content.lastChild);
+              if (content.innerHTML) pages.push(content.innerHTML);
+              content.innerHTML = '';
+              content.appendChild(chunk.cloneNode(true));
+            }}
+          }}
+          pageElems = [content.lastChild];
+        }}
+      }}
+    }} else {{
+      pageElems.push(el);
+    }}
+  }}
+  // Last page
+  if (content.innerHTML) {{
+    pages.push(content.innerHTML);
+  }}
+
+  if (pages.length === 0) pages = [raw];
+  if (page >= pages.length) page = pages.length - 1;
+}}
+
+function render() {{
+  content.innerHTML = pages[page] || '';
+  content.scrollTop = 0;
+  const total = pages.length;
+  pageinfo.textContent = total > 1 ? `${{page + 1}} / ${{total}}` : '';
+  progress.textContent = total > 1 ? `${{Math.round((page + 1) / total * 100)}}%` : '';
+}}
+
+function go(delta) {{
+  const next = page + delta;
+  if (next >= 0 && next < pages.length) {{ page = next; render(); }}
+}}
+
+// Click zones
+document.getElementById('zone-left').addEventListener('click', () => go(-1));
+document.getElementById('zone-right').addEventListener('click', () => go(1));
+
+// Keyboard
+document.addEventListener('keydown', e => {{
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') go(-1);
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') {{ e.preventDefault(); go(1); }}
+}});
+
+// Buttons
+
+// Mode toggle (persisted in localStorage)
+let mode = localStorage.getItem('plan-view-mode') || '{default_mode}';
+
+function applyMode() {{
+  const isNormal = mode === 'normal';
+  document.body.classList.toggle('normal', isNormal);
+  modeToggle.textContent = isNormal ? '墨水屏' : '普通模式';
+  if (isNormal) {{
+    content.style.overflow = '';
+    content.style.height = 'auto';
+    content.innerHTML = raw;
+    content.querySelectorAll('table').forEach(t => {{
+      if (!t.parentElement.classList.contains('table-wrap')) {{
+        const w = document.createElement('div');
+        w.className = 'table-wrap';
+        t.parentNode.insertBefore(w, t);
+        w.appendChild(t);
+      }}
+    }});
+  }} else {{
+    paginate();
+    render();
+  }}
+}}
+
+modeToggle.addEventListener('click', () => {{
+  mode = mode === 'eink' ? 'normal' : 'eink';
+  localStorage.setItem('plan-view-mode', mode);
+  applyMode();
+}});
+
+// Re-paginate on resize
+window.addEventListener('resize', () => {{
+  if (mode === 'eink') {{ paginate(); render(); }}
+}});
+
+applyMode();
+</script>
+</body></html>"""
+
+        body = html.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_index(self):
+        RENDERS_DIR.mkdir(parents=True, exist_ok=True)
+        # TikZ renders
+        svgs = sorted(
+            RENDERS_DIR.glob("*.svg"),
+            key=lambda f: f.stat().st_birthtime,
+            reverse=True,
+        )
+        render_cards = ""
+        for svg in svgs:
+            name = svg.stem
+            pdf_path = RENDERS_DIR / f"{name}.pdf"
+            pdf_link = ""
+            if pdf_path.exists():
+                pdf_link = f' | <a href="/{name}.pdf">PDF</a>'
+            render_cards += f"""
+            <div class="card">
+                <a href="/{svg.name}"><img src="/{svg.name}" alt="{name}"></a>
+                <div class="name">{name}{pdf_link}</div>
+            </div>"""
+        if not render_cards:
+            render_cards = '<p class="empty">暂无渲染图</p>'
+
+        # Plans (sorted by creation time, newest first)
+        plan_cards = ""
+        if PLANS_DIR.exists():
+            plans = sorted(
+                PLANS_DIR.glob("*.md"),
+                key=lambda f: f.stat().st_birthtime,
+                reverse=True,
+            )
+            for plan in plans:
+                name = plan.stem
+                display = name.replace("-", " ").title()
+                # Read first non-empty, non-frontmatter line as summary
+                summary = ""
+                for line in plan.read_text().splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and not line.startswith("---"):
+                        summary = line[:120]
+                        if len(line) > 120:
+                            summary += "..."
+                        break
+                plan_url = f"/plans/{urllib.parse.quote(plan.name)}"
+                plan_cards += f"""
+                <div class="plan-card">
+                    <a href="{plan_url}">{display}</a>
+                    <div class="summary">{summary}</div>
+                </div>"""
+        if not plan_cards:
+            plan_cards = '<p class="empty">暂无计划</p>'
+
+        html = f"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>预览服务</title>
 <style>
 body {{ font-family: system-ui, -apple-system, sans-serif; margin: 2rem; background: #f5f5f5; color: #333; }}
-h1 {{ margin-bottom: 1.5rem; }}
+h1 {{ margin-bottom: .5rem; }}
+h2 {{ margin-top: 2rem; margin-bottom: 1rem; color: #555; border-bottom: 1px solid #ddd; padding-bottom: .5rem; }}
 .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem; }}
 .card {{ background: #fff; border-radius: 8px; padding: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,.1); }}
 .card img {{ width: 100%; height: auto; border: 1px solid #eee; border-radius: 4px; }}
 .name {{ margin-top: .5rem; font-size: .9rem; color: #555; word-break: break-all; }}
+.plan-card {{ background: #fff; border-radius: 8px; padding: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,.1); }}
+.plan-card a {{ font-weight: 600; font-size: 1rem; }}
+.summary {{ margin-top: .4rem; font-size: .85rem; color: #666; }}
 .empty {{ color: #888; text-align: center; grid-column: 1/-1; }}
 a {{ color: #2563eb; text-decoration: none; }}
 a:hover {{ text-decoration: underline; }}
 </style>
 </head><body>
-<h1>TikZ Renders</h1>
-<div class="grid">{cards}</div>
+<h1>预览服务</h1>
+
+<h2>计划 ({len(list(PLANS_DIR.glob("*.md"))) if PLANS_DIR.exists() else 0})</h2>
+<div class="grid">{plan_cards}</div>
+
+<h2>TikZ 渲染 ({len(svgs)})</h2>
+<div class="grid">{render_cards}</div>
+
 </body></html>"""
 
         body = html.encode()
@@ -117,7 +530,7 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
-    print(f"TikZ server listening on 0.0.0.0:{port}")
+    print(f"Preview server listening on 0.0.0.0:{port}")
     server.serve_forever()
 
 

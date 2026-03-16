@@ -15,6 +15,7 @@ Copy the following to your AI assistant:
 | Skill | Description |
 |-------|-------------|
 | [codex](skills/codex/) | Invoke Codex CLI from Claude Code to get a second opinion from GPT models. Supports session resume for multi-turn conversations. |
+| [tikz](skills/tikz/) | TikZ diagram rendering with HTTP preview server. Write TikZ code, compile to SVG, view in browser. Includes a plan viewer with e-ink reading mode and pagination. |
 
 ## Installation
 
