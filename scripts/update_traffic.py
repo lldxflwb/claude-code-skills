@@ -16,8 +16,11 @@ def fetch_clones():
     """Fetch clone data from GitHub API via gh CLI."""
     result = subprocess.run(
         ["gh", "api", f"repos/{REPO}/traffic/clones"],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True,
     )
+    if result.returncode != 0:
+        print(f"gh api failed (exit {result.returncode}): {result.stderr.strip()}")
+        raise SystemExit(1)
     return json.loads(result.stdout)
 
 
