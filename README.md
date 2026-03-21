@@ -50,6 +50,10 @@ which codex || npm install -g @anthropic-ai/codex
 3. Supporting scripts go in a `scripts/` subdirectory
 4. Include clear prerequisites and usage examples
 
+
+## links
+[linux.do Utilizing GPT as a Supervisor for Claude: Leveraging Two Skills for Code Review and Red Teaming](https://linux.do/t/topic/1789473)
+
 ## License
 
 MIT
