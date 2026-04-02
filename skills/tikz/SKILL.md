@@ -70,6 +70,28 @@ Use relative URI (e.g. `/name.svg`), not absolute URL or local file path. The pl
 - Use `positioning` library for `right=of` syntax
 - Use `arrows.meta` for modern arrow styles
 
+## Temp Markdown Preview
+
+The preview server also hosts a `/temp/` directory for viewing arbitrary markdown files (translations, notes, etc.).
+
+- **Directory**: `~/.cache/tikz-skill/temp/`
+- **Browse**: `http://<host>:<port>/temp/` — auto-generated directory index with subdirectory navigation
+- **Preview**: `http://<host>:<port>/temp/<name>.md` — full markdown rendering (e-ink / normal / eyecare modes)
+- **Static files**: non-`.md` files are served as-is
+
+Supports symlinks and subdirectories:
+
+```bash
+# Symlink a file
+ln -s /path/to/translated-page.md ~/.cache/tikz-skill/temp/
+
+# Symlink an entire directory
+ln -s /path/to/project/docs ~/.cache/tikz-skill/temp/project-docs
+
+# Or just copy
+cp notes.md ~/.cache/tikz-skill/temp/
+```
+
 ## Error Recovery
 
 Compilation errors are printed to stderr. Read the error, fix the `.tex` file, re-render.
