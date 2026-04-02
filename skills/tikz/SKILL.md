@@ -72,25 +72,31 @@ Use relative URI (e.g. `/name.svg`), not absolute URL or local file path. The pl
 
 ## Temp Markdown Preview
 
-The preview server also hosts a `/temp/` directory for viewing arbitrary markdown files (translations, notes, etc.).
+The preview server hosts a `/temp/` directory for viewing arbitrary markdown files (translations, notes, etc.).
 
-- **Directory**: `~/.cache/tikz-skill/temp/`
-- **Browse**: `http://<host>:<port>/temp/` — auto-generated directory index with subdirectory navigation
-- **Preview**: `http://<host>:<port>/temp/<name>.md` — full markdown rendering (e-ink / normal / eyecare modes)
-- **Static files**: non-`.md` files are served as-is
-
-Supports symlinks and subdirectories:
+Submit content via the script (similar to `render_tikz.py`):
 
 ```bash
-# Symlink a file
-ln -s /path/to/translated-page.md ~/.cache/tikz-skill/temp/
+# Copy a file into temp preview
+python3 /Users/karlchen/.claude/skills/tikz/scripts/submit_temp.py <path-to-file>
 
-# Symlink an entire directory
-ln -s /path/to/project/docs ~/.cache/tikz-skill/temp/project-docs
+# Symlink instead of copy (good for large files or live-editing)
+python3 /Users/karlchen/.claude/skills/tikz/scripts/submit_temp.py --link <path>
 
-# Or just copy
-cp notes.md ~/.cache/tikz-skill/temp/
+# Symlink a directory
+python3 /Users/karlchen/.claude/skills/tikz/scripts/submit_temp.py --link /path/to/docs/
+
+# Custom name
+python3 /Users/karlchen/.claude/skills/tikz/scripts/submit_temp.py --name translated.md <path>
 ```
+
+Output is two lines: the preview URL and the path in the temp directory. The script ensures the server is running automatically.
+
+- `.md` files are rendered with full markdown viewer (e-ink / normal / eyecare modes, TOC, auto-refresh)
+- Directories get an auto-generated index page
+- Other files are served as static downloads
+
+**Do NOT** manipulate the temp directory directly — always use the script.
 
 ## Error Recovery
 
