@@ -21,7 +21,7 @@ Copy the following to your AI assistant:
 | [codex](skills/codex/) | Invoke Codex CLI from Claude Code to get a second opinion from GPT models. Supports session resume for multi-turn conversations. |
 | [codex-plan](skills/codex-plan/) | Automated adversarial plan review: Claude writes the plan, GPT challenges it, Claude evaluates and revises — loop until LGTM. |
 | [claude](skills/claude/) | Launch an independent Claude Code subprocess to bridge between existing sessions. Resume any session by ID, auto-lookup working directory, read-only whitelist sandbox. |
-| [tikz](skills/tikz/) | TikZ diagram rendering with HTTP preview server. Write TikZ code, compile to SVG, view in browser. Includes a plan viewer with e-ink reading mode and pagination. |
+| [tikz](skills/tikz/) | TikZ diagram rendering with HTTP preview server. Write TikZ code, compile to SVG, view in browser. Includes a plan viewer with e-ink/eyecare reading modes, and a temp markdown directory (`/temp/`) for previewing translated pages, notes, etc. via symlinks or copies. |
 | [agent-sdk](skills/agent-sdk/) | Local Claude Agent SDK documentation. Query offline docs for API reference, code examples, and guides. Includes update script to sync latest docs from docs.anthropic.com. |
 
 ## Installation

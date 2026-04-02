@@ -53,6 +53,6 @@ def get_port():
 
 def get_default_view_mode():
     val = os.environ.get("TIKZ_DEFAULT_VIEW_MODE")
-    if val and val in ("eink", "normal"):
+    if val and val in ("eink", "normal", "eyecare"):
         return val
     return _file_cfg.get("default_view_mode") or DEFAULTS["default_view_mode"]

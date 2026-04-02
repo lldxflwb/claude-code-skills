@@ -14,6 +14,14 @@ CACHE_DIR = Path.home() / ".cache" / "tikz-skill"
 RENDERS_DIR = CACHE_DIR / "renders"
 STATE_FILE = CACHE_DIR / "server.json"
 PLANS_DIR = Path.home() / ".claude" / "plans"
+TEMP_MD_DIR = CACHE_DIR / "temp"
+
+
+def _safe_path(base_dir, name):
+    """Join base_dir/name, block '..' only. Follows symlinks."""
+    if ".." in Path(name).parts:
+        return None
+    return base_dir / name
 
 
 class TikZHandler(SimpleHTTPRequestHandler):
@@ -34,6 +42,8 @@ class TikZHandler(SimpleHTTPRequestHandler):
             self._api_mtime()
         elif self.path.startswith("/plans/"):
             self._serve_plan()
+        elif self.path.startswith("/temp"):
+            self._serve_temp()
         else:
             super().do_GET()
 
@@ -61,10 +71,14 @@ class TikZHandler(SimpleHTTPRequestHandler):
     def _api_mtime(self):
         qs = urllib.parse.urlparse(self.path).query
         params = urllib.parse.parse_qs(qs)
-        file_path = params.get("file", [""])[0]
+        file_path = urllib.parse.unquote(params.get("file", [""])[0])
         mtime = 0
         if file_path.startswith("plans/"):
             p = PLANS_DIR / file_path[len("plans/"):]
+            if p.exists():
+                mtime = p.stat().st_mtime
+        elif file_path.startswith("temp/"):
+            p = TEMP_MD_DIR / file_path[len("temp/"):]
             if p.exists():
                 mtime = p.stat().st_mtime
         elif file_path:
@@ -84,16 +98,89 @@ class TikZHandler(SimpleHTTPRequestHandler):
     def _serve_plan(self):
         """Serve a plan markdown file rendered as HTML."""
         name = urllib.parse.unquote(self.path[len("/plans/"):])
-        plan_file = PLANS_DIR / name
-        if not plan_file.exists() or not plan_file.suffix == ".md":
-            self.send_error(404, "Plan not found")
+        self._serve_markdown(PLANS_DIR, name)
+
+    def _serve_temp(self):
+        """Serve temp dir: directory index, .md rendering, or static file."""
+        raw = self.path[len("/temp"):].lstrip("/")
+        name = urllib.parse.unquote(raw).strip("/")
+        target = _safe_path(TEMP_MD_DIR, name) if name else TEMP_MD_DIR
+        if not target or not target.exists():
+            self.send_error(404)
+            return
+        if target.is_dir():
+            self._serve_dir_index(target, name)
+        elif target.suffix == ".md":
+            self._serve_markdown(target.parent, target.name)
+        else:
+            # Serve static file
+            import mimetypes
+            ct = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+            data = target.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    def _serve_dir_index(self, dir_path, rel_prefix):
+        """Auto-generate recursive directory index for temp."""
+        items = sorted(dir_path.iterdir(), key=lambda f: (f.is_file(), f.name.lower()))
+        rows = ""
+        for item in items:
+            rel = f"{rel_prefix}/{item.name}" if rel_prefix else item.name
+            href = f"/temp/{urllib.parse.quote(rel)}"
+            if item.is_dir():
+                icon, suffix = "\U0001F4C1", "/"
+                rows += f'<tr><td>{icon}</td><td><a href="{href}/">{item.name}/</a></td><td>-</td></tr>\n'
+            else:
+                icon = "\U0001F4D6" if item.suffix == ".md" else "\U0001F4C4"
+                size = item.stat().st_size
+                size_str = f"{size}" if size < 1024 else f"{size/1024:.1f}K" if size < 1048576 else f"{size/1048576:.1f}M"
+                rows += f'<tr><td>{icon}</td><td><a href="{href}">{item.name}</a></td><td>{size_str}</td></tr>\n'
+
+        parent_link = ""
+        if rel_prefix:
+            parent = "/temp/" + "/".join(rel_prefix.split("/")[:-1]) if "/" in rel_prefix else "/temp/"
+            parent_link = f'<a href="{parent}">&larr; 上级目录</a>'
+
+        title = f"/{rel_prefix}" if rel_prefix else "/temp"
+        html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>{title}</title>
+<style>
+body {{ font-family: system-ui, sans-serif; margin: 2rem; background: #f5f5f5; color: #333; }}
+h1 {{ font-size: 1.3rem; margin-bottom: 1rem; }}
+a {{ color: #2563eb; text-decoration: none; }}
+a:hover {{ text-decoration: underline; }}
+table {{ border-collapse: collapse; width: 100%; max-width: 700px; }}
+td {{ padding: .4rem .8rem; border-bottom: 1px solid #eee; }}
+td:first-child {{ width: 2rem; text-align: center; }}
+td:last-child {{ width: 5rem; text-align: right; color: #888; font-size: .85rem; }}
+.nav {{ margin-bottom: 1rem; font-size: .9rem; }}
+</style></head><body>
+<div class="nav"><a href="/">&larr; 首页</a> {parent_link}</div>
+<h1>{title}</h1>
+<table>{rows}</table>
+</body></html>"""
+        body = html.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_markdown(self, base_dir, name):
+        """Serve a markdown file from base_dir rendered as HTML."""
+        md_file = base_dir / name
+        if not md_file.exists() or md_file.suffix != ".md":
+            self.send_error(404, "File not found")
             return
 
         import base64 as _b64
         from config import get_default_view_mode
-        md_content = plan_file.read_text()
+        md_content = md_file.read_text()
         md_b64 = _b64.b64encode(md_content.encode()).decode()
-        title = plan_file.stem.replace("-", " ").title()
+        title = md_file.stem.replace("-", " ").title()
         default_mode = get_default_view_mode()
 
         html = f"""<!DOCTYPE html>
@@ -159,16 +246,38 @@ body.normal .page-content a {{ color: #2563eb; }}
 body.normal .page-content th {{ background: #f9fafb; }}
 body.normal .page-content blockquote {{ border-left-color: #d1d5db; color: #6b7280; }}
 
-/* FAB group (normal mode only) */
+/* === Eye-care mode (护眼模式) === */
+body.eyecare {{ height: auto; overflow: auto; background: #f5eddc; color: #4a3f35;
+  font-family: Georgia, 'Noto Serif SC', serif; }}
+body.eyecare .topbar {{ background: #e8dcc8; border-bottom-color: #c8b899; color: #5b4636; }}
+body.eyecare .topbar a {{ color: #5b4636; }}
+body.eyecare .mode-btn {{ border-color: #b0a08a; color: #5b4636; }}
+body.eyecare .mode-btn:hover {{ background: #ddd0b8; }}
+body.eyecare .reader {{ overflow: visible; -webkit-user-select: auto; user-select: auto; cursor: auto; }}
+body.eyecare .page-zone {{ display: none; }}
+body.eyecare .page-content {{ overflow: visible; padding: 1.5rem 2rem; line-height: 1.9;
+  max-width: 100%; font-size: 1.2rem; }}
+body.eyecare .page-content code {{ background: #e8dcc8; color: #5b4636; }}
+body.eyecare .page-content pre {{ background: #ede3d0; border-color: #c8b899; }}
+body.eyecare .page-content a {{ color: #8b6914; }}
+body.eyecare .page-content th {{ background: #e8dcc8; }}
+body.eyecare .page-content td, body.eyecare .page-content th {{ border-color: #c8b899; }}
+body.eyecare .page-content blockquote {{ border-left-color: #b0a08a; color: #6b5d4d; }}
+body.eyecare .page-content h1 {{ border-bottom-color: #b0a08a; }}
+body.eyecare .page-content img {{ filter: brightness(.95) sepia(.1); }}
+
+/* FAB group (normal & eyecare modes) */
 .fab-group {{ display: none; }}
-body.normal .fab-group {{ display: flex; flex-direction: column; gap: .5rem;
+body.normal .fab-group, body.eyecare .fab-group {{ display: flex; flex-direction: column; gap: .5rem;
   position: fixed; right: 1.5rem; bottom: 2rem; z-index: 100; }}
 .toc-fab {{ display: none; }}
-body.normal .toc-fab {{ display: flex; width: 3rem; height: 3rem;
+body.normal .toc-fab, body.eyecare .toc-fab {{ display: flex; width: 3rem; height: 3rem;
   border-radius: 50%; background: #2563eb; color: #fff; border: none; cursor: pointer;
   align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 2px 8px rgba(0,0,0,.2);
   transition: background .2s; }}
 body.normal .toc-fab:hover {{ background: #1d4ed8; }}
+body.eyecare .toc-fab {{ background: #8b6914; }}
+body.eyecare .toc-fab:hover {{ background: #735812; }}
 .toc-sidebar {{ position: fixed; top: 0; right: -320px; width: 300px; height: 100vh;
   background: #fff; box-shadow: -2px 0 12px rgba(0,0,0,.1); z-index: 99;
   transition: right .25s ease; padding: 1rem 0; overflow-y: auto; }}
@@ -189,7 +298,7 @@ body.normal .toc-fab:hover {{ background: #1d4ed8; }}
 
 /* PDF export button */
 .pdf-fab {{ display: none; }}
-body.normal .pdf-fab {{ display: flex; width: 3rem; height: 3rem;
+body.normal .pdf-fab, body.eyecare .pdf-fab {{ display: flex; width: 3rem; height: 3rem;
   border-radius: 50%; background: #16a34a; color: #fff; border: none; cursor: pointer;
   align-items: center; justify-content: center; font-size: .75rem; font-weight: 700;
   box-shadow: 0 2px 8px rgba(0,0,0,.2); transition: background .2s; letter-spacing: .05em; }}
@@ -475,12 +584,18 @@ document.addEventListener('keydown', e => {{
 
 // Mode toggle (persisted in localStorage)
 let mode = localStorage.getItem('plan-view-mode') || '{default_mode}';
+const modeLabels = {{ eink: '墨水屏', normal: '普通', eyecare: '护眼' }};
+const modeCycle = ['eink', 'normal', 'eyecare'];
 
 function applyMode() {{
-  const isNormal = mode === 'normal';
-  document.body.classList.toggle('normal', isNormal);
-  modeToggle.textContent = isNormal ? '墨水屏' : '普通模式';
-  if (isNormal) {{
+  document.body.classList.remove('normal', 'eyecare');
+  if (mode !== 'eink') document.body.classList.add(mode);
+  const nextIdx = (modeCycle.indexOf(mode) + 1) % modeCycle.length;
+  modeToggle.textContent = modeLabels[modeCycle[nextIdx]];
+  if (mode === 'eink') {{
+    paginate();
+    render();
+  }} else {{
     content.style.overflow = '';
     content.style.height = 'auto';
     content.innerHTML = raw;
@@ -492,14 +607,12 @@ function applyMode() {{
         w.appendChild(t);
       }}
     }});
-  }} else {{
-    paginate();
-    render();
   }}
 }}
 
 modeToggle.addEventListener('click', () => {{
-  mode = mode === 'eink' ? 'normal' : 'eink';
+  const idx = modeCycle.indexOf(mode);
+  mode = modeCycle[(idx + 1) % modeCycle.length];
   localStorage.setItem('plan-view-mode', mode);
   applyMode();
 }});
@@ -574,14 +687,14 @@ window.addEventListener('scroll', () => {{
 const origApply = applyMode;
 applyMode = function() {{
   origApply();
-  if (mode === 'normal') buildToc();
+  if (mode !== 'eink') buildToc();
 }};
 applyMode();
 
 // Auto-refresh: poll server for file changes
 let refreshTimer = null;
 let lastMtime = 0;
-const planFile = 'plans/' + location.pathname.split('/plans/')[1];
+const planFile = decodeURIComponent(location.pathname.substring(1));
 
 function startAutoRefresh() {{
   fetch('/api/config').then(r => r.json()).then(cfg => {{
@@ -672,6 +785,7 @@ h1 { margin-bottom: 1.5rem; }
     <select id="cfg-mode">
       <option value="normal">普通模式</option>
       <option value="eink">墨水屏模式</option>
+      <option value="eyecare">护眼模式</option>
     </select>
     <div class="hint">新用户首次打开时的默认模式。用户切换后会记住选择。</div>
   </div>
@@ -823,12 +937,16 @@ loadConfig();
         if not plan_cards:
             plan_cards = '<p class="empty">暂无计划</p>'
 
+        # Temp directory: count items
+        temp_count = len(list(TEMP_MD_DIR.iterdir())) if TEMP_MD_DIR.exists() else 0
+
         html = f"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <title>预览服务</title>
 <style>
-body {{ font-family: system-ui, -apple-system, sans-serif; margin: 2rem; background: #f5f5f5; color: #333; }}
+body {{ font-family: system-ui, -apple-system, sans-serif; margin: 2rem; background: #f5f5f5; color: #333;
+  transition: background .3s, color .3s; }}
 h1 {{ margin-bottom: .5rem; }}
 h2 {{ margin-top: 2rem; margin-bottom: 1rem; color: #555; border-bottom: 1px solid #ddd; padding-bottom: .5rem; }}
 .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem; }}
@@ -841,9 +959,28 @@ h2 {{ margin-top: 2rem; margin-bottom: 1rem; color: #555; border-bottom: 1px sol
 .empty {{ color: #888; text-align: center; grid-column: 1/-1; }}
 a {{ color: #2563eb; text-decoration: none; }}
 a:hover {{ text-decoration: underline; }}
+.mode-btn {{ background: none; border: 2px solid #999; border-radius: 4px;
+  padding: .2rem .7rem; cursor: pointer; font-size: .8rem; font-weight: 600; }}
+.mode-btn:hover {{ background: #e0e0e0; }}
+/* Index eyecare mode */
+body.eyecare {{ background: #f5eddc; color: #4a3f35; }}
+body.eyecare h2 {{ color: #6b5d4d; border-bottom-color: #c8b899; }}
+body.eyecare .card, body.eyecare .plan-card {{ background: #ede3d0; box-shadow: 0 2px 4px rgba(90,70,40,.12); }}
+body.eyecare .card img {{ border-color: #c8b899; }}
+body.eyecare .name {{ color: #6b5d4d; }}
+body.eyecare .summary {{ color: #7a6c5a; }}
+body.eyecare a {{ color: #8b6914; }}
+body.eyecare .mode-btn {{ border-color: #b0a08a; color: #5b4636; }}
+body.eyecare .mode-btn:hover {{ background: #ddd0b8; }}
 </style>
 </head><body>
-<h1 style="display:flex;justify-content:space-between;align-items:center;">预览服务 <a href="/settings" style="font-size:.9rem;font-weight:400;">设置</a></h1>
+<h1 style="display:flex;justify-content:space-between;align-items:center;">预览服务
+<span style="display:flex;align-items:center;gap:.8rem;">
+  <button class="mode-btn" id="idx-mode"></button>
+  <a href="/settings" style="font-size:.9rem;font-weight:400;">设置</a>
+</span></h1>
+
+<h2><a href="/temp/">临时文档 ({temp_count})</a></h2>
 
 <h2>计划 ({len(list(PLANS_DIR.glob("*.md"))) if PLANS_DIR.exists() else 0})</h2>
 <div class="grid">{plan_cards}</div>
@@ -851,6 +988,24 @@ a:hover {{ text-decoration: underline; }}
 <h2>TikZ 渲染 ({len(svgs)})</h2>
 <div class="grid">{render_cards}</div>
 
+<script>
+const btn = document.getElementById('idx-mode');
+const modes = ['normal', 'eyecare'];
+const labels = {{ normal: '护眼', eyecare: '普通' }};
+let idxMode = localStorage.getItem('index-view-mode') || 'normal';
+function applyIdx() {{
+  document.body.classList.remove('eyecare');
+  if (idxMode === 'eyecare') document.body.classList.add('eyecare');
+  const next = modes[(modes.indexOf(idxMode) + 1) % modes.length];
+  btn.textContent = labels[idxMode];
+}}
+btn.addEventListener('click', () => {{
+  idxMode = modes[(modes.indexOf(idxMode) + 1) % modes.length];
+  localStorage.setItem('index-view-mode', idxMode);
+  applyIdx();
+}});
+applyIdx();
+</script>
 </body></html>"""
 
         body = html.encode()
@@ -869,6 +1024,7 @@ def main():
     host = get_host()
 
     RENDERS_DIR.mkdir(parents=True, exist_ok=True)
+    TEMP_MD_DIR.mkdir(parents=True, exist_ok=True)
     server = HTTPServer(("0.0.0.0", port), TikZHandler)
 
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
